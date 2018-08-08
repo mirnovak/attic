@@ -5,7 +5,6 @@ import msgpack
 import os
 import pwd
 import re
-import stat
 import sys
 import time
 from datetime import datetime, timezone, timedelta
@@ -183,6 +182,14 @@ def get_cache_dir():
 def to_localtime(ts):
     """Convert datetime object from UTC to local time zone"""
     return datetime(*time.localtime((ts - datetime(1970, 1, 1, tzinfo=timezone.utc)).total_seconds())[:6])
+
+
+def parse_timestamp(timestamp):
+    """Parse a ISO 8601 timestamp string"""
+    if '.' in timestamp:  # microseconds might not be pressent
+        return datetime.strptime(timestamp, '%Y-%m-%dT%H:%M:%S.%f').replace(tzinfo=timezone.utc)
+    else:
+        return datetime.strptime(timestamp, '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc)
 
 
 def update_excludes(args):
@@ -457,6 +464,21 @@ class Location:
     def __repr__(self):
         return "Location(%s)" % self
 
+    def canonical_path(self):
+        if self.proto == 'file':
+            return self.path
+        else:
+            if self.path and self.path.startswith('~'):
+                path = '/' + self.path
+            elif self.path and not self.path.startswith('/'):
+                path = '/~/' + self.path
+            else:
+                path = self.path
+            return 'ssh://{}{}{}{}'.format('{}@'.format(self.user) if self.user else '',
+                                                        self.host,
+                                                        ':{}'.format(self.port) if self.port else '',
+                                                        path)
+
 
 def location_validator(archive=None):
     def validator(text):
@@ -498,7 +520,7 @@ def remove_surrogates(s, errors='replace'):
     return s.encode('utf-8', errors).decode('utf-8')
 
 
-_safe_re = re.compile('^((..)?/+)+')
+_safe_re = re.compile(r'^((\.\.)?/+)+')
 
 
 def make_path_safe(path):

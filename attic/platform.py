@@ -1,14 +1,14 @@
 import os
 import subprocess
 import io
+import sys
 
-platform = os.uname()[0]
 
-if platform == 'Linux':
+if sys.platform.startswith('linux'):
     from attic.platform_linux import acl_get, acl_set, API_VERSION
-elif platform == 'FreeBSD':
+elif sys.platform.startswith('freebsd'):
     from attic.platform_freebsd import acl_get, acl_set, API_VERSION
-elif platform == 'Darwin':
+elif sys.platform == 'darwin':
     from attic.platform_darwin import acl_get, acl_set, API_VERSION
 elif platform.startswith('CYGWIN'):
     API_VERSION = 2
@@ -40,9 +40,9 @@ elif platform.startswith('CYGWIN'):
                     #raise Exception('ACLs not set successfully')
                                       
 else:
-    API_VERSION = 1
+    API_VERSION = 2
 
-    def acl_get(path, item, numeric_owner=False):
+    def acl_get(path, item, st, numeric_owner=False):
         pass
     def acl_set(path, item, numeric_owner=False):
         pass

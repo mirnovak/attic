@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from getpass import getuser
 from itertools import groupby
 import errno
@@ -17,7 +17,7 @@ from attic import xattr
 from attic.platform import acl_get, acl_set
 from attic.chunker import Chunker
 from attic.hashindex import ChunkIndex
-from attic.helpers import Error, uid2user, user2uid, gid2group, group2gid, \
+from attic.helpers import parse_timestamp, Error, uid2user, user2uid, gid2group, group2gid, \
     Manifest, Statistics, decode_dict, st_mtime_ns, make_path_safe, StableDict, int_to_bigint, bigint_to_int
 
 ITEMS_BUFFER = 1024 * 1024
@@ -119,6 +119,10 @@ class Archive:
     class AlreadyExists(Error):
         """Archive {} already exists"""
 
+    class IncompatibleFilesystemEncodingError(Error):
+        """Failed to encode filename "{}" into file system encoding "{}". Consider configuring the LANG environment variable."""
+
+
     def __init__(self, repository, key, manifest, name, cache=None, create=False,
                  checkpoint_interval=300, numeric_owner=False):
         self.cwd = os.getcwd()
@@ -131,10 +135,10 @@ class Archive:
         self.name = name
         self.checkpoint_interval = checkpoint_interval
         self.numeric_owner = numeric_owner
-        self.items_buffer = CacheChunkBuffer(self.cache, self.key, self.stats)
         self.pipeline = DownloadPipeline(self.repository, self.key)
-        self.chunker = Chunker(WINDOW_SIZE, CHUNK_MASK, CHUNK_MIN, self.key.chunk_seed)
         if create:
+            self.items_buffer = CacheChunkBuffer(self.cache, self.key, self.stats)
+            self.chunker = Chunker(WINDOW_SIZE, CHUNK_MASK, CHUNK_MIN, self.key.chunk_seed)
             if name in manifest.archives:
                 raise self.AlreadyExists(name)
             self.last_checkpoint = time.time()
@@ -163,8 +167,7 @@ class Archive:
     @property
     def ts(self):
         """Timestamp of archive creation in UTC"""
-        t, f = self.metadata[b'time'].split('.', 1)
-        return datetime.strptime(t, '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc) + timedelta(seconds=float('.' + f))
+        return parse_timestamp(self.metadata[b'time'])
 
     def __repr__(self):
         return 'Archive(%r)' % self.name
@@ -208,9 +211,9 @@ class Archive:
 
     def calc_stats(self, cache):
         def add(id):
-            count, size, csize = self.cache.chunks[id]
+            count, size, csize = cache.chunks[id]
             stats.update(size, csize, count == 1)
-            self.cache.chunks[id] = count - 1, size, csize
+            cache.chunks[id] = count - 1, size, csize
         def add_file_chunks(chunks):
             for id, _, _ in chunks:
                 add(id)
@@ -248,6 +251,8 @@ class Archive:
                 os.rmdir(path)
             else:
                 os.unlink(path)
+        except UnicodeEncodeError:
+            raise self.IncompatibleFilesystemEncodingError(path, sys.getfilesystemencoding())
         except OSError:
             pass
         mode = item[b'mode']

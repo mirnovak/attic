@@ -2,9 +2,11 @@ from configparser import RawConfigParser
 from attic.remote import cache_if_remote
 import msgpack
 import os
+import sys
 from binascii import hexlify
 import shutil
 
+from .key import PlaintextKey
 from .helpers import Error, get_cache_dir, decode_dict, st_mtime_ns, unhexlify, UpgradableLock, int_to_bigint, \
     bigint_to_int
 from .hashindex import ChunkIndex
@@ -16,25 +18,63 @@ class Cache(object):
     class RepositoryReplay(Error):
         """Cache is newer than repository, refusing to continue"""
 
-    def __init__(self, repository, key, manifest, path=None, sync=True):
+    class CacheInitAbortedError(Error):
+        """Cache initialization aborted"""
+
+    class RepositoryAccessAborted(Error):
+        """Repository access aborted"""
+
+    class EncryptionMethodMismatch(Error):
+        """Repository encryption method changed since last acccess, refusing to continue
+        """
+
+    def __init__(self, repository, key, manifest, path=None, sync=True, warn_if_unencrypted=True):
+        self.lock = None
         self.timestamp = None
         self.txn_active = False
         self.repository = repository
         self.key = key
         self.manifest = manifest
         self.path = path or os.path.join(get_cache_dir(), hexlify(repository.id).decode('ascii'))
+        # Warn user before sending data to a never seen before unencrypted repository
         if not os.path.exists(self.path):
+            if warn_if_unencrypted and isinstance(key, PlaintextKey):
+                if not self._confirm('Warning: Attempting to access a previously unknown unencrypted repository',
+                                     'ATTIC_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK'):
+                    raise self.CacheInitAbortedError()
             self.create()
         self.open()
+        # Warn user before sending data to a relocated repository
+        if self.previous_location and self.previous_location != repository._location.canonical_path():
+            msg = 'Warning: The repository at location {} was previously located at {}'.format(repository._location.canonical_path(), self.previous_location)
+            if not self._confirm(msg, 'ATTIC_RELOCATED_REPO_ACCESS_IS_OK'):
+                raise self.RepositoryAccessAborted()
+
         if sync and self.manifest.id != self.manifest_id:
             # If repository is older than the cache something fishy is going on
             if self.timestamp and self.timestamp > manifest.timestamp:
                 raise self.RepositoryReplay()
+            # Make sure an encrypted repository has not been swapped for an unencrypted repository
+            if self.key_type is not None and self.key_type != str(key.TYPE):
+                raise self.EncryptionMethodMismatch()
             self.sync()
             self.commit()
 
     def __del__(self):
         self.close()
+
+    def _confirm(self, message, env_var_override=None):
+        print(message, file=sys.stderr)
+        if env_var_override and os.environ.get(env_var_override):
+            print("Yes (From {})".format(env_var_override))
+            return True
+        if not sys.stdin.isatty():
+            return False
+        try:
+            answer = input('Do you want to continue? [yN] ')
+        except EOFError:
+            return False
+        return answer and answer in 'Yy'
 
     def create(self):
         """Create a new empty cache at `path`
@@ -53,11 +93,7 @@ class Cache(object):
         with open(os.path.join(self.path, 'files'), 'w') as fd:
             pass  # empty file
 
-    def open(self):
-        if not os.path.isdir(self.path):
-            raise Exception('%s Does not look like an Attic cache' % self.path)
-        self.lock = UpgradableLock(os.path.join(self.path, 'config'), exclusive=True)
-        self.rollback()
+    def _do_open(self):
         self.config = RawConfigParser()
         self.config.read(os.path.join(self.path, 'config'))
         if self.config.getint('cache', 'version') != 1:
@@ -65,11 +101,21 @@ class Cache(object):
         self.id = self.config.get('cache', 'repository')
         self.manifest_id = unhexlify(self.config.get('cache', 'manifest'))
         self.timestamp = self.config.get('cache', 'timestamp', fallback=None)
+        self.key_type = self.config.get('cache', 'key_type', fallback=None)
+        self.previous_location = self.config.get('cache', 'previous_location', fallback=None)
         self.chunks = ChunkIndex.read(os.path.join(self.path, 'chunks').encode('utf-8'))
         self.files = None
 
+    def open(self):
+        if not os.path.isdir(self.path):
+            raise Exception('%s Does not look like an Attic cache' % self.path)
+        self.lock = UpgradableLock(os.path.join(self.path, 'config'), exclusive=True)
+        self.rollback()
+
     def close(self):
-        self.lock.release()
+        if self.lock:
+            self.lock.release()
+            self.lock = None
 
     def _read_files(self):
         self.files = {}
@@ -111,6 +157,8 @@ class Cache(object):
                         msgpack.pack((path_hash, item), fd)
         self.config.set('cache', 'manifest', hexlify(self.manifest.id).decode('ascii'))
         self.config.set('cache', 'timestamp', self.manifest.timestamp)
+        self.config.set('cache', 'key_type', str(self.key.TYPE))
+        self.config.set('cache', 'previous_location', self.repository._location.canonical_path())
         with open(os.path.join(self.path, 'config'), 'w') as fd:
             self.config.write(fd)
         self.chunks.write(os.path.join(self.path, 'chunks').encode('utf-8'))
@@ -135,6 +183,7 @@ class Cache(object):
             if os.path.exists(os.path.join(self.path, 'txn.tmp')):
                 shutil.rmtree(os.path.join(self.path, 'txn.tmp'))
         self.txn_active = False
+        self._do_open()
 
     def sync(self):
         """Initializes cache by fetching and reading all archive indicies

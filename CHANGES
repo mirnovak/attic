@@ -3,10 +3,33 @@ Attic Changelog
 
 Here you can see the full list of changes between each Attic release.
 
+Version 0.17
+------------
+
+(bugfix release, released on X)
+- Fix hashindex ARM memory alignment issue (#309)
+- Improve hashindex error messages (#298)
+
+Version 0.16
+------------
+
+(bugfix release, released on May 16, 2015)
+- Fix typo preventing the security confirmation prompt from working (#303)
+- Improve handling of systems with improperly configured file system encoding (#289)
+- Fix "All archives" output for attic info. (#183)
+- More user friendly error message when repository key file is not found (#236)
+- Fix parsing of iso 8601 timestamps with zero microseconds (#282)
+
 Version 0.15
 ------------
 
-(feature release, released on X)
+(bugfix release, released on Apr 15, 2015)
+- xattr: Be less strict about unknown/unsupported platforms (#239)
+- Reduce repository listing memory usage (#163).
+- Fix BrokenPipeError for remote repositories (#233)
+- Fix incorrect behavior with two character directory names (#265, #268)
+- Require approval before accessing relocated/moved repository (#271)
+- Require approval before accessing previously unknown unencrypted repositories (#271)
 - Fix issue with hash index files larger than 2GB.
 - Fix Python 3.2 compatibility issue with noatime open() (#164)
 - Include missing pyx files in dist files (#168)

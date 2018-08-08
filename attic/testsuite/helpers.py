@@ -5,7 +5,7 @@ import os
 import tempfile
 import unittest
 from attic.helpers import adjust_patterns, exclude_path, Location, format_timedelta, IncludePattern, ExcludePattern, make_path_safe, UpgradableLock, prune_within, prune_split, to_localtime, \
-    StableDict, int_to_bigint, bigint_to_int
+    StableDict, int_to_bigint, bigint_to_int, parse_timestamp
 from attic.testsuite import AtticTestCase
 import msgpack
 
@@ -50,6 +50,14 @@ class LocationTestCase(AtticTestCase):
             "Location(proto='file', user=None, host=None, port=None, path='some/relative/path', archive='archive')"
         )
         self.assert_raises(ValueError, lambda: Location('ssh://localhost:22/path:archive'))
+
+    def test_canonical_path(self):
+        locations = ['some/path::archive', 'file://some/path::archive', 'host:some/path::archive',
+                     'host:~user/some/path::archive', 'ssh://host/some/path::archive',
+                     'ssh://user@host:1234/some/path::archive']
+        for location in locations:
+            self.assert_equal(Location(location).canonical_path(),
+                              Location(Location(location).canonical_path()).canonical_path())
 
 
 class FormatTimedeltaTestCase(AtticTestCase):
@@ -101,11 +109,12 @@ class MakePathSafeTestCase(AtticTestCase):
     def test(self):
         self.assert_equal(make_path_safe('/foo/bar'), 'foo/bar')
         self.assert_equal(make_path_safe('/foo/bar'), 'foo/bar')
+        self.assert_equal(make_path_safe('/f/bar'), 'f/bar')
+        self.assert_equal(make_path_safe('fo/bar'), 'fo/bar')
         self.assert_equal(make_path_safe('../foo/bar'), 'foo/bar')
         self.assert_equal(make_path_safe('../../foo/bar'), 'foo/bar')
         self.assert_equal(make_path_safe('/'), '.')
         self.assert_equal(make_path_safe('/'), '.')
-
 
 class UpgradableLockTestCase(AtticTestCase):
 
@@ -200,3 +209,10 @@ class StableDictTestCase(AtticTestCase):
         d = StableDict(foo=1, bar=2, boo=3, baz=4)
         self.assert_equal(list(d.items()), [('bar', 2), ('baz', 4), ('boo', 3), ('foo', 1)])
         self.assert_equal(hashlib.md5(msgpack.packb(d)).hexdigest(), 'fc78df42cd60691b3ac3dd2a2b39903f')
+
+
+class TestParseTimestamp(AtticTestCase):
+
+    def test(self):
+        self.assert_equal(parse_timestamp('2015-04-19T20:25:00.226410'), datetime(2015, 4, 19, 20, 25, 0, 226410, timezone.utc))
+        self.assert_equal(parse_timestamp('2015-04-19T20:25:00'), datetime(2015, 4, 19, 20, 25, 0, 0, timezone.utc))
